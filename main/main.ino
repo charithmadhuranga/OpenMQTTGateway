@@ -2053,6 +2053,9 @@ void loop() {
 #  ifdef ZgatewayLORA
         stateLORAMeasures();
 #  endif
+#  ifdef ZgatewayRTL_433
+        stateRTL_433Measures();
+#  endif
 #  if defined(ZwebUI) && defined(ESP32)
         stateWebUIStatus();
 #  endif
@@ -2410,20 +2413,6 @@ String stateMeasures() {
 #  endif
 #  if defined(ZgatewayRF) || defined(ZgatewayPilight) || defined(ZgatewayRTL_433) || defined(ZgatewayRF2)
   SYSdata["actRec"] = (int)activeReceiver;
-#  endif
-#  if defined(ZradioCC1101) || defined(ZradioSX127x)
-  SYSdata["mhz"] = (float)receiveMhz;
-#  endif
-#  if defined(ZgatewayRTL_433)
-  if (activeReceiver == ACTIVE_RTL) {
-    SYSdata["RTLRssiThresh"] = (int)getRTLrssiThreshold();
-    SYSdata["RTLRssi"] = (int)getRTLCurrentRSSI();
-    SYSdata["RTLAVGRssi"] = (int)getRTLAverageRSSI();
-    SYSdata["RTLCnt"] = (int)getRTLMessageCount();
-#    ifdef ZradioSX127x
-    SYSdata["RTLOOKThresh"] = (int)getOOKThresh();
-#    endif
-  }
 #  endif
   SYSdata["modules"] = modules;
 

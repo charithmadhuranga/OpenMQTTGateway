@@ -42,6 +42,14 @@ char messageBuffer[JSON_MSG_BUFFER];
 
 rtl_433_ESP rtl_433;
 
+struct RTL_433Config_s {
+  float frequency;
+  int rssiThreshold;
+  int newOokThreshold;
+};
+
+RTL_433Config_s RTL_433Config;
+
 #  ifdef ZmqttDiscovery
 SemaphoreHandle_t semaphorecreateOrUpdateDeviceRTL_433;
 std::vector<RTL_433device*> RTL_433devices;
@@ -219,6 +227,128 @@ void storeRTL_433Discovery(JsonObject& RFrtl_433_ESPdata, const char* model, con
 }
 #  endif
 
+String stateRTL_433Measures() {
+  //Publish RTL_433 state
+  StaticJsonDocument<JSON_MSG_BUFFER> jsonBuffer;
+  JsonObject RTL_433data = jsonBuffer.to<JsonObject>();
+
+#  if defined(ZradioCC1101) || defined(ZradioSX127x)
+  RTL_433data["frequency"] = RTL_433Config.frequency;
+#  endif
+
+  if (activeReceiver == ACTIVE_RTL) {
+    RTL_433data["rssithreshold"] = (int)getRTLrssiThreshold();
+    RTL_433data["rssi"] = (int)getRTLCurrentRSSI();
+    RTL_433data["avgrssi"] = (int)getRTLAverageRSSI();
+    RTL_433data["count"] = (int)getRTLMessageCount();
+#  ifdef ZradioSX127x
+    RTL_433data["ookthreshold"] = (int)getOOKThresh();
+#  endif
+
+    pub(subjectRTL_433toMQTT, RTL_433data);
+
+    String output;
+    serializeJson(RTL_433data, output);
+    return output;
+  }
+}
+
+void RTL_433Config_fromJson(JsonObject& RTL_433data) {
+  bool success = false;
+  if (RTL_433data.containsKey("frequency") && validFrequency(RTL_433data["frequency"])) {
+    Config_update(RTL_433data, "frequency", RTL_433Config.frequency);
+    Log.notice(F("RTL_433 Receive mhz: %F" CR), RTL_433Config.frequency);
+    success = true;
+  }
+  if (RTL_433data.containsKey("active")) {
+    Log.trace(F("RTL_433 active:" CR));
+    activeReceiver = ACTIVE_RTL; // Enable RTL_433 Gateway
+    success = true;
+  }
+  if (RTL_433data.containsKey("rssithreshold")) {
+    Config_update(RTL_433data, "rssithreshold", RTL_433Config.rssiThreshold);
+    Log.notice(F("RTL_433 RSSI Threshold : %d " CR), RTL_433Config.rssiThreshold);
+    rtl_433.setRSSIThreshold(RTL_433Config.rssiThreshold);
+    success = true;
+  }
+#  if defined(RF_SX1276) || defined(RF_SX1278)
+  if (RTL_433data.containsKey("ookthreshold")) {
+    Config_update(RTL_433data, "ookthreshold", RTL_433Config.newOokThreshold);
+    Log.notice(F("RTL_433 ookThreshold %d" CR), RTL_433Config.newOokThreshold);
+    rtl_433.setOOKThreshold(RTL_433Config.newOokThreshold);
+    success = true;
+  }
+#  endif
+  if (RTL_433data.containsKey("status")) {
+    Log.notice(F("RTL_433 get status:" CR));
+    rtl_433.getStatus();
+    success = true;
+  }
+  if (!success) {
+    Log.error(F("[rtl_433] MQTTtoRTL_433 Fail json" CR));
+  }
+  enableActiveReceiver(false);
+
+  if (RTL_433data.containsKey("erase") && RTL_433data["erase"].as<bool>()) {
+    // Erase config from NVS (non-volatile storage)
+    preferences.begin(Gateway_Short_Name, false);
+    if (preferences.isKey("RTL_433Config")) {
+      int result = preferences.remove("RTL_433Config");
+      Log.notice(F("RTL_433 config erase result: %d" CR), result);
+      preferences.end();
+      return; // Erase prevails on save, so skipping save
+    } else {
+      Log.notice(F("RTL_433 config not found" CR));
+      preferences.end();
+    }
+  }
+  if (RTL_433data.containsKey("save") && RTL_433data["save"].as<bool>()) {
+    StaticJsonDocument<JSON_MSG_BUFFER> jsonBuffer;
+    JsonObject jo = jsonBuffer.to<JsonObject>();
+    jo["frequency"] = RTL_433Config.frequency;
+    // Don't save those for now, need to be tested
+    //jo["rssithreshold"] = RTL_433Config.rssiThreshold;
+    //jo["ookthreshold"] = RTL_433Config.newOokThreshold;
+    // Save config into NVS (non-volatile storage)
+    String conf = "";
+    serializeJson(jsonBuffer, conf);
+    preferences.begin(Gateway_Short_Name, false);
+    int result = preferences.putString("RTL_433Config", conf);
+    preferences.end();
+    Log.notice(F("RTL_433 Config_save: %s, result: %d" CR), conf.c_str(), result);
+  }
+}
+
+void RTL_433Config_init() {
+  RTL_433Config.frequency = CC1101_FREQUENCY;
+  RTL_433Config.rssiThreshold = 0;
+  RTL_433Config.newOokThreshold = 0;
+}
+
+void RTL_433Config_load() {
+  StaticJsonDocument<JSON_MSG_BUFFER> jsonBuffer;
+  preferences.begin(Gateway_Short_Name, true);
+  if (preferences.isKey("RTL_433Config")) {
+    auto error = deserializeJson(jsonBuffer, preferences.getString("RTL_433Config", "{}"));
+    preferences.end();
+    Log.notice(F("RTL_433 Config loaded" CR));
+    if (error) {
+      Log.error(F("RTL_433 Config deserialization failed: %s, buffer capacity: %u" CR), error.c_str(), jsonBuffer.capacity());
+      return;
+    }
+    if (jsonBuffer.isNull()) {
+      Log.warning(F("RTL_433 Config is null" CR));
+      return;
+    }
+    JsonObject jo = jsonBuffer.as<JsonObject>();
+    RTL_433Config_fromJson(jo);
+    Log.notice(F("RTL_433 Config loaded" CR));
+  } else {
+    preferences.end();
+    Log.notice(F("RTL_433 Config not found" CR));
+  }
+}
+
 void rtl_433_Callback(char* message) {
   DynamicJsonDocument jsonBuffer2(JSON_MSG_BUFFER);
   JsonObject RFrtl_433_ESPdata = jsonBuffer2.to<JsonObject>();
@@ -268,12 +398,14 @@ void rtl_433_Callback(char* message) {
 }
 
 void setupRTL_433() {
+  RTL_433Config_init();
+  RTL_433Config_load();
   rtl_433.setCallback(rtl_433_Callback, messageBuffer, JSON_MSG_BUFFER);
 #  ifdef ZmqttDiscovery
   semaphorecreateOrUpdateDeviceRTL_433 = xSemaphoreCreateBinary();
   xSemaphoreGive(semaphorecreateOrUpdateDeviceRTL_433);
 #  endif
-  Log.trace(F("ZgatewayRTL_433 command topic: %s%s%s" CR), mqtt_topic, gateway_name, subjectMQTTtoRTL_433);
+  Log.trace(F("ZgatewayRTL_433 command topic: %s%s%s" CR), mqtt_topic, gateway_name, subjectMQTTtoRTL_433set);
   Log.notice(F("ZgatewayRTL_433 setup done " CR));
 }
 
@@ -281,58 +413,32 @@ void RTL_433Loop() {
   rtl_433.loop();
 }
 
-extern void MQTTtoRTL_433(char* topicOri, JsonObject& RTLdata) {
-  if (cmpToMainTopic(topicOri, subjectMQTTtoRTL_433)) {
-    float tempMhz = RTLdata["mhz"];
-    bool success = false;
-    if (RTLdata.containsKey("mhz") && validFrequency(tempMhz)) {
-      receiveMhz = tempMhz;
-      Log.notice(F("RTL_433 Receive mhz: %F" CR), receiveMhz);
-      success = true;
+extern void MQTTtoRTL_433(char* topicOri, JsonObject& RTL_433data) {
+  if (cmpToMainTopic(topicOri, subjectMQTTtoRTL_433set)) {
+    Log.trace(F("MQTTtoRTL_433 json set" CR));
+
+    /*
+     * Configuration modifications priorities:
+     *  First `init=true` and `load=true` commands are executed (if both are present, INIT prevails on LOAD)
+     *  Then parameters included in json are taken in account
+     *  Finally `erase=true` and `save=true` commands are executed (if both are present, ERASE prevails on SAVE)
+     */
+    if (RTL_433data.containsKey("init") && RTL_433data["init"].as<bool>()) {
+      // Restore the default (initial) configuration
+      RTL_433Config_init();
+    } else if (RTL_433data.containsKey("load") && RTL_433data["load"].as<bool>()) {
+      // Load the saved configuration, if not initialised
+      RTL_433Config_load();
     }
-    if (RTLdata.containsKey("active")) {
-      Log.trace(F("RTL_433 active:" CR));
-      activeReceiver = ACTIVE_RTL; // Enable RTL_433 Gateway
-      success = true;
-    }
-    if (RTLdata.containsKey("rssi")) {
-      int rssiThreshold = RTLdata["rssi"] | 0;
-      Log.notice(F("RTL_433 RSSI Threshold Delta: %d " CR), rssiThreshold);
-      rtl_433.setRSSIThreshold(rssiThreshold);
-      success = true;
-    }
-#  if defined(RF_SX1276) || defined(RF_SX1278)
-    if (RTLdata.containsKey("ookThreshold")) {
-      int newOokThreshold = RTLdata["ookThreshold"] | 0;
-      Log.notice(F("RTL_433 ookThreshold %d" CR), newOokThreshold);
-      rtl_433.setOOKThreshold(newOokThreshold);
-      success = true;
-    }
-#  endif
-    if (RTLdata.containsKey("debug")) {
-      int debug = RTLdata["debug"] | -1;
-      Log.notice(F("RTL_433 set debug: %d" CR), debug);
-      // rtl_433.setDebug(debug);
-      rtl_433.initReceiver(RF_MODULE_RECEIVER_GPIO, receiveMhz);
-      success = true;
-    }
-    if (RTLdata.containsKey("status")) {
-      Log.notice(F("RTL_433 get status:" CR));
-      rtl_433.getStatus();
-      success = true;
-    }
-    if (success) {
-      pub(subjectRTL_433toMQTT, RTLdata);
-    } else {
-      pub(subjectRTL_433toMQTT, "{\"Status\": \"Error\"}"); // Fail feedback
-      Log.error(F("[rtl_433] MQTTtoRTL_433 Fail json" CR));
-    }
-    enableActiveReceiver(false);
+
+    // Load config from json if available
+    RTL_433Config_fromJson(RTL_433data);
+    stateRTL_433Measures();
   }
 }
 
 extern void enableRTLreceive() {
-  Log.notice(F("Switching to RTL_433 Receiver: %FMhz" CR), receiveMhz);
+  Log.notice(F("Switching to RTL_433 Receiver: %FMhz" CR), RTL_433Config.frequency);
 #  ifdef ZgatewayRF
   disableRFReceive();
 #  endif
@@ -343,7 +449,7 @@ extern void enableRTLreceive() {
   disablePilightReceive();
 #  endif
 
-  rtl_433.initReceiver(RF_MODULE_RECEIVER_GPIO, receiveMhz);
+  rtl_433.initReceiver(RF_MODULE_RECEIVER_GPIO, RTL_433Config.frequency);
   rtl_433.enableReceiver();
 }
 

@@ -947,54 +947,72 @@ void handleLA() {
     if (server.hasArg("save")) {
       StaticJsonDocument<JSON_MSG_BUFFER> jsonBuffer;
       JsonObject WEBtoLORA = jsonBuffer.to<JsonObject>();
-
+      bool update = false;
       if (server.hasArg("lf")) {
         WEBtoLORA["frequency"] = server.arg("lf");
+        update = true;
       }
 
       if (server.hasArg("lt")) {
         WEBtoLORA["txpower"] = server.arg("lt");
+        update = true;
       }
 
       if (server.hasArg("ls")) {
         WEBtoLORA["spreadingfactor"] = server.arg("ls");
+        update = true;
       }
 
       if (server.hasArg("lb")) {
         WEBtoLORA["signalbandwidth"] = server.arg("lb");
+        update = true;
       }
 
       if (server.hasArg("lc")) {
         WEBtoLORA["codingrate"] = server.arg("lc");
+        update = true;
       }
 
       if (server.hasArg("ll")) {
         WEBtoLORA["preamblelength"] = server.arg("ll");
+        update = true;
       }
 
       if (server.hasArg("lw")) {
         WEBtoLORA["syncword"] = server.arg("lw");
+        update = true;
       }
 
       if (server.hasArg("lr")) {
         WEBtoLORA["enablecrc"] = server.arg("lr");
+        update = true;
       } else {
         WEBtoLORA["enablecrc"] = false;
+        update = true;
       }
 
       if (server.hasArg("li")) {
         WEBtoLORA["invertiq"] = server.arg("li");
+        update = true;
       } else {
         WEBtoLORA["invertiq"] = false;
+        update = true;
       }
 
       if (server.hasArg("ok")) {
         WEBtoLORA["onlyknown"] = server.arg("ok");
+        update = true;
       } else {
         WEBtoLORA["onlyknown"] = false;
+        update = true;
       }
-
-      LORAConfig_fromJson(WEBtoLORA);
+      if (update) {
+        Log.notice(F("[WebUI] Save data" CR));
+        WEBtoLORA["save"] = true;
+        LORAConfig_fromJson(WEBtoLORA);
+        stateLORAMeasures();
+        Log.trace(F("[WebUI] LORAConfig end" CR));
+      }
     }
   }
   char jsonChar[100];
@@ -1056,8 +1074,74 @@ void handleLA() {
   snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
   response += String(buffer);
   server.send(200, "text/html", response);
-  stateLORAMeasures();
-  Log.trace(F("[WebUI] LORAConfig end" CR));
+}
+#  elif defined(ZgatewayRTL_433)
+/**
+ * @brief /RL - Configure RTL_433 Page
+ * T: handleRL: uri: /rl, args: 2, method: 1
+ * T: handleRL Arg: 0, rf=868.30
+ * T: handleRL Arg: 1, oo=0
+ * T: handleRL Arg: 2, rs=0
+ * T: handleRL Arg: 3, dg=0
+ * T: handleRL Arg: 4, save=
+ */
+
+void handleRL() {
+  WEBUI_TRACE_LOG(F("handleRL: uri: %s, args: %d, method: %d" CR), server.uri(), server.args(), server.method());
+  WEBUI_SECURE
+  bool update = false;
+  StaticJsonDocument<JSON_MSG_BUFFER> jsonBuffer;
+  JsonObject WEBtoRTL_433 = jsonBuffer.to<JsonObject>();
+
+  if (server.args()) {
+    for (uint8_t i = 0; i < server.args(); i++) {
+      WEBUI_TRACE_LOG(F("handleRL Arg: %d, %s=%s" CR), i, server.argName(i).c_str(), server.arg(i).c_str());
+    }
+    if (server.hasArg("save")) {
+      if (server.hasArg("rf")) {
+        String freqStr = server.arg("rf");
+        RTL_433Config.frequency = freqStr.toFloat();
+        if (validFrequency(RTL_433Config.frequency)) {
+          WEBtoRTL_433["frequency"] = RTL_433Config.frequency;
+          update = true;
+        } else {
+          Log.warning(F("[WebUI] Invalid Frequency" CR));
+        }
+      }
+      if (server.hasArg("oo")) {
+        RTL_433Config.newOokThreshold = server.arg("oo").toInt();
+        WEBtoRTL_433["ookthreshold"] = RTL_433Config.newOokThreshold;
+        update = true;
+      }
+      if (server.hasArg("rs")) {
+        RTL_433Config.rssiThreshold = server.arg("rs").toInt();
+        WEBtoRTL_433["rssithreshold"] = RTL_433Config.rssiThreshold;
+        update = true;
+      }
+      if (update) {
+        Log.notice(F("[WebUI] Save data" CR));
+        WEBtoRTL_433["save"] = true;
+        RTL_433Config_fromJson(WEBtoRTL_433);
+        stateRTL_433Measures();
+        Log.trace(F("[WebUI] RTL_433Config end" CR));
+      }
+    }
+  }
+
+  char jsonChar[100];
+  serializeJson(modules, jsonChar, measureJson(modules) + 1);
+  char buffer[WEB_TEMPLATE_BUFFER_MAX_SIZE];
+
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, header_html, (String(gateway_name) + " - Configure RTL_433").c_str());
+  String response = String(buffer);
+  response += String(script);
+  response += String(style);
+
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, config_rtl_433_body, jsonChar, gateway_name, RTL_433Config.frequency, RTL_433Config.newOokThreshold, RTL_433Config.rssiThreshold);
+  response += String(buffer);
+  snprintf(buffer, WEB_TEMPLATE_BUFFER_MAX_SIZE, footer, OMG_VERSION);
+  response += String(buffer);
+  server.send(200, "text/html", response);
 }
 #  endif
 
@@ -1228,6 +1312,10 @@ void handleIN() {
 #  if defined(ZgatewayLORA)
     informationDisplay += "1<BR>LORA}2}1";
     informationDisplay += stateLORAMeasures();
+#  endif
+#  if defined(ZgatewayRTL_433)
+    informationDisplay += "1<BR>RTL_433}2}1";
+    informationDisplay += stateRTL_433Measures();
 #  endif
     informationDisplay += "1<BR>WebUI}2}1";
     informationDisplay += stateWebUIStatus();
@@ -1494,6 +1582,8 @@ void WebUISetup() {
   server.on("/wu", handleWU); // Configure WebUI
 #  ifdef ZgatewayLORA
   server.on("/la", handleLA); // Configure LORA
+#  elif defined(ZgatewayRTL_433)
+  server.on("/rl", handleRL); // Configure RTL_433
 #  endif
 #  if defined(ZgatewayCloud)
   server.on("/cl", handleCL); // Configure Cloud
