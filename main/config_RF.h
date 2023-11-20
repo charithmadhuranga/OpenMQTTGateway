@@ -180,6 +180,11 @@ const char parameters[40][4][24] = {
 #ifndef CC1101_FREQUENCY
 #  define CC1101_FREQUENCY 433.92
 #endif
+// Allow ZGatewayRF Module to change receive frequency of CC1101 Transceiver module
+// not used anymore with RTL_433
+#if defined(ZradioCC1101) || defined(ZradioSX127x)
+float receiveMhz = CC1101_FREQUENCY;
+#endif
 /*-------------------CC1101 DefaultTXPower----------------------*/
 //Adjust the default TX-Power for sending radio if ZradioCC1101 is used.
 //The following settings are possible depending on the frequency band.  (-30  -20  -15  -10  -6    0    5    7    10   11   12) Default is max!
